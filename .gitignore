@@ -39,6 +39,14 @@ outputs/
 *.flv
 *.wmv
 
+# Model files
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+*.weights
+
 # IDEs
 .vscode/
 .idea/
