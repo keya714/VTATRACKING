@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tap Detection System</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+
+        .upload-section {
+            text-align: center;
+        }
+
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 10px;
+            padding: 50px;
+            background: #f8f9ff;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+
+        .upload-area:hover {
+            background: #e8ebff;
+            border-color: #764ba2;
+        }
+
+        .upload-area.dragging {
+            background: #d0d8ff;
+            border-color: #667eea;
+        }
+
+        .upload-icon {
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+
+        .upload-text {
+            font-size: 1.2em;
+            color: #555;
+            margin-bottom: 10px;
+        }
+
+        .upload-subtext {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: #6c757d;
+        }
+
+        .progress-container {
+            display: none;
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .status-message {
+            text-align: center;
+            font-size: 1em;
+            color: #555;
+        }
+
+        .results-section {
+            display: none;
+        }
+
+        .result-card {
+            background: #f8f9ff;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 5px;
+        }
+
+        .result-header {
+            font-size: 1.3em;
+            margin-bottom: 15px;
+            color: #333;
+            font-weight: bold;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .stat-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .person-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .person-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .color-indicator {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            border: 3px solid #ddd;
+        }
+
+        .person-details h4 {
+            margin-bottom: 5px;
+            color: #333;
+        }
+
+        .person-details p {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .status-badge {
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .status-tapped {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-not-tapped {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+
+        .logs-section {
+            max-height: 400px;
+            overflow-y: auto;
+            background: #f8f9ff;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .log-entry {
+            background: white;
+            padding: 12px;
+            margin-bottom: 10px;
+            border-radius: 5px;
+            border-left: 3px solid #667eea;
+            font-size: 0.9em;
+        }
+
+        .log-timestamp {
+            color: #888;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+        }
+
+        .log-content {
+            color: #333;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .loading-spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+
+        .params-section {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .param-group {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .param-group label {
+            margin-bottom: 5px;
+            color: #555;
+            font-weight: 500;
+        }
+
+        .param-group input {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+        }
+
+        .param-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Tap Detection System</h1>
+            <p>Multi-Person Fare Payment Detection with SmolVLM & RT-DETR</p>
+        </div>
+
+        <div class="card upload-section">
+            <h2 style="margin-bottom: 20px; color: #333;">Upload Video</h2>
+            
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📹</div>
+                <div class="upload-text">Drag & drop your video here</div>
+                <div class="upload-subtext">or click to browse (MP4, AVI, MOV, MKV)</div>
+                <input type="file" id="fileInput" accept="video/*">
+            </div>
+
+            <div id="fileInfo" style="display: none; margin-bottom: 20px;">
+                <div class="alert alert-info">
+                    <strong>Selected:</strong> <span id="fileName"></span> 
+                    (<span id="fileSize"></span> MB)
+                </div>
+            </div>
+
+            <div class="params-section" id="paramsSection" style="display: none;">
+                <div class="param-group">
+                    <label for="confThreshold">Confidence Threshold</label>
+                    <input type="number" id="confThreshold" value="0.7" min="0" max="1" step="0.1">
+                </div>
+                <div class="param-group">
+                    <label for="framesPerCheck">Frames Per Check</label>
+                    <input type="number" id="framesPerCheck" value="3" min="1" max="10">
+                </div>
+                <div class="param-group">
+                    <label for="checkInterval">Check Interval</label>
+                    <input type="number" id="checkInterval" value="30" min="10" max="100">
+                </div>
+                <div class="param-group">
+                    <label for="initialFrame">Initial Frame</label>
+                    <input type="number" id="initialFrame" value="0" min="0">
+                </div>
+            </div>
+
+            <div style="margin-top: 20px;">
+                <button class="btn" id="uploadBtn" disabled>Upload Video</button>
+                <button class="btn" id="processBtn" disabled>Process Video</button>
+            </div>
+
+            <div class="progress-container" id="progressContainer">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill">0%</div>
+                </div>
+                <div class="status-message" id="statusMessage">Initializing...</div>
+            </div>
+        </div>
+
+        <div class="card results-section" id="resultsSection">
+            <h2 style="margin-bottom: 20px; color: #333;">Detection Results</h2>
+            
+            <div class="stat-grid">
+                <div class="stat-item">
+                    <div class="stat-value" id="totalPeople">0</div>
+                    <div class="stat-label">Total People</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="peopleTapped" style="color: #28a745;">0</div>
+                    <div class="stat-label">People Tapped</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="peopleNotTapped" style="color: #dc3545;">0</div>
+                    <div class="stat-label">Not Tapped</div>
+                </div>
+            </div>
+
+            <div class="result-card">
+                <div class="result-header">Individual Results</div>
+                <div id="peopleList"></div>
+            </div>
+
+            <div class="download-buttons">
+                <button class="btn" id="downloadVideoBtn">📥 Download Video</button>
+                <button class="btn btn-secondary" id="downloadResultsBtn">📊 Download Results JSON</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2 style="margin-bottom: 20px; color: #333;">Activity Logs</h2>
+            <div class="logs-section" id="logsSection">
+                <p style="text-align: center; color: #888;">No logs yet</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:8501';
+        let uploadedFilename = '';
+        let ws = null;
+
+        // WebSocket connection
+        function connectWebSocket() {
+            ws = new WebSocket('ws://localhost:8501/ws');
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateProgress(data.progress, data.message);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket closed, reconnecting...');
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        connectWebSocket();
+
+        // File upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const uploadBtn = document.getElementById('uploadBtn');
+        const processBtn = document.getElementById('processBtn');
+        const fileInfo = document.getElementById('fileInfo');
+        const paramsSection = document.getElementById('paramsSection');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragging');
+        });
+
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragging');
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragging');
+            
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                handleFileSelect();
+            }
+        });
+
+        fileInput.addEventListener('change', handleFileSelect);
+
+        function handleFileSelect() {
+            const file = fileInput.files[0];
+            if (file) {
+                const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+                document.getElementById('fileName').textContent = file.name;
+                document.getElementById('fileSize').textContent = sizeMB;
+                fileInfo.style.display = 'block';
+                paramsSection.style.display = 'grid';
+                uploadBtn.disabled = false;
+            }
+        }
+
+        uploadBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            uploadBtn.disabled = true;
+            showProgress('Uploading video...', 0);
+
+            try {
+                const response = await fetch(`${API_URL}/api/upload`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    uploadedFilename = data.filename;
+                    showAlert('success', `Video uploaded successfully! (${data.file_size_mb} MB)`);
+                    processBtn.disabled = false;
+                    hideProgress();
+                    loadLogs();
+                } else {
+                    throw new Error(data.message || 'Upload failed');
+                }
+            } catch (error) {
+                showAlert('error', `Upload failed: ${error.message}`);
+                uploadBtn.disabled = false;
+                hideProgress();
+            }
+        });
+
+        processBtn.addEventListener('click', async () => {
+            if (!uploadedFilename) return;
+
+            const confThreshold = parseFloat(document.getElementById('confThreshold').value);
+            const framesPerCheck = parseInt(document.getElementById('framesPerCheck').value);
+            const checkInterval = parseInt(document.getElementById('checkInterval').value);
+            const initialFrame = parseInt(document.getElementById('initialFrame').value);
+
+            processBtn.disabled = true;
+            showProgress('Starting processing...', 0);
+
+            try {
+                const response = await fetch(
+                    `${API_URL}/api/process/${uploadedFilename}?conf_threshold=${confThreshold}&frames_per_check=${framesPerCheck}&check_interval=${checkInterval}&initial_frame=${initialFrame}`,
+                    { method: 'POST' }
+                );
+
+                const data = await response.json();
+
+                if (data.status === 'success') {
+                    displayResults(data.results);
+                    setupDownloadButtons(data.output_video, data.results_file);
+                    showAlert('success', 'Processing complete!');
+                    loadLogs();
+                } else {
+                    throw new Error(data.message || 'Processing failed');
+                }
+            } catch (error) {
+                showAlert('error', `Processing failed: ${error.message}`);
+            } finally {
+                processBtn.disabled = false;
+                hideProgress();
+            }
+        });
+
+        function updateProgress(progress, message) {
+            const progressContainer = document.getElementById('progressContainer');
+            const progressFill = document.getElementById('progressFill');
+            const statusMessage = document.getElementById('statusMessage');
+
+            progressContainer.style.display = 'block';
+            progressFill.style.width = `${progress}%`;
+            progressFill.textContent = `${progress}%`;
+            statusMessage.textContent = message;
+        }
+
+        function showProgress(message, progress) {
+            updateProgress(progress, message);
+        }
+
+        function hideProgress() {
+            setTimeout(() => {
+                document.getElementById('progressContainer').style.display = 'none';
+            }, 2000);
+        }
+
+        function displayResults(results) {
+            document.getElementById('resultsSection').style.display = 'block';
+            
+            document.getElementById('totalPeople').textContent = results.summary.total_people;
+            document.getElementById('peopleTapped').textContent = results.summary.people_tapped;
+            document.getElementById('peopleNotTapped').textContent = results.summary.people_not_tapped;
+
+            const peopleList = document.getElementById('peopleList');
+            peopleList.innerHTML = '';
+
+            results.people.forEach(person => {
+                const personCard = document.createElement('div');
+                personCard.className = 'person-card';
+                
+                const rgb = `rgb(${person.color_rgb.join(',')})`;
+                const statusClass = person.tapped ? 'status-tapped' : 'status-not-tapped';
+                const statusText = person.tapped ? '✓ TAPPED' : '✗ NOT TAPPED';
+                const frameInfo = person.tapped ? ` (Frame ${person.tap_frame})` : '';
+
+                personCard.innerHTML = `
+                    <div class="person-info">
+                        <div class="color-indicator" style="background: ${rgb};"></div>
+                        <div class="person-details">
+                            <h4>${person.color} Box (ID: ${person.track_id})</h4>
+                            <p>Tracked for ${person.total_frames_tracked} frames${frameInfo}</p>
+                        </div>
+                    </div>
+                    <div class="status-badge ${statusClass}">${statusText}</div>
+                `;
+
+                peopleList.appendChild(personCard);
+            });
+        }
+
+        function setupDownloadButtons(videoFilename, resultsFilename) {
+            document.getElementById('downloadVideoBtn').onclick = () => {
+                window.open(`${API_URL}/api/download/video/${videoFilename}`, '_blank');
+            };
+
+            document.getElementById('downloadResultsBtn').onclick = () => {
+                window.open(`${API_URL}/api/download/results/${resultsFilename}`, '_blank');
+            };
+        }
+
+        function showAlert(type, message) {
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.textContent = message;
+            
+            document.querySelector('.upload-section').insertBefore(
+                alertDiv,
+                document.querySelector('.upload-section').firstChild
+            );
+
+            setTimeout(() => alertDiv.remove(), 5000);
+        }
+
+        async function loadLogs() {
+            try {
+                const response = await fetch(`${API_URL}/api/logs?log_type=processing&limit=20`);
+                const data = await response.json();
+
+                const logsSection = document.getElementById('logsSection');
+                logsSection.innerHTML = '';
+
+                if (data.logs.length === 0) {
+                    logsSection.innerHTML = '<p style="text-align: center; color: #888;">No logs yet</p>';
+                    return;
+                }
+
+                data.logs.reverse().forEach(log => {
+                    const logEntry = document.createElement('div');
+                    logEntry.className = 'log-entry';
+
+                    const timestamp = new Date(log.timestamp).toLocaleString();
+                    
+                    logEntry.innerHTML = `
+                        <div class="log-timestamp">${timestamp}</div>
+                        <div class="log-content">
+                            <strong>${log.action.toUpperCase()}:</strong> ${log.input_file || log.filename}
+                            ${log.summary ? `<br>Results: ${log.summary.people_tapped}/${log.summary.total_people} tapped` : ''}
+                        </div>
+                    `;
+
+                    logsSection.appendChild(logEntry);
+                });
+            } catch (error) {
+                console.error('Failed to load logs:', error);
+            }
+        }
+
+        // Load logs on page load
+        loadLogs();
+        setInterval(loadLogs, 10000); // Refresh every 10 seconds
+    </script>
+</body>
+</html>

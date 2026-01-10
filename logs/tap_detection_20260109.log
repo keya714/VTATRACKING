@@ -1,0 +1,18 @@
+2026-01-09 21:43:35,300 - INFO - Starting Tap Detection API Server...
+2026-01-09 21:43:58,499 - INFO - Starting Tap Detection API Server...
+2026-01-09 21:48:34,641 - INFO - Please save the frontend HTML to static/index.html
+2026-01-09 21:48:34,643 - INFO - ======================================================================
+2026-01-09 21:48:34,644 - INFO - ======================================================================
+2026-01-09 21:48:34,661 - INFO - ======================================================================
+2026-01-09 21:48:34,669 - INFO - ======================================================================
+2026-01-09 21:49:18,614 - INFO - Please save the frontend HTML to static/index.html
+2026-01-09 21:49:18,614 - INFO - ======================================================================
+2026-01-09 21:49:18,638 - INFO - ======================================================================
+2026-01-09 21:49:18,658 - INFO - ======================================================================
+2026-01-09 21:49:18,673 - INFO - ======================================================================
+2026-01-09 21:49:32,827 - INFO - WebSocket connection established. Total connections: 1
+2026-01-09 21:49:51,022 - INFO - Received upload request for file: Bus_Boarding_Fare_Validation_Sequence.mp4
+2026-01-09 21:49:51,029 - INFO - File saved successfully: uploads\20260109_214951_Bus_Boarding_Fare_Validation_Sequence.mp4
+2026-01-09 21:49:54,726 - INFO - Starting processing for: 20260109_214951_Bus_Boarding_Fare_Validation_Sequence.mp4
+2026-01-09 21:49:54,737 - INFO - Status Update: processing - 0% - Initializing tracker...
+2026-01-09 21:51:45,844 - INFO - Starting multi-person tracking...
