@@ -255,6 +255,68 @@
             margin-top: 20px;
         }
 
+        .live-events-section {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+
+        .event-item {
+            background: white;
+            padding: 10px 15px;
+            margin-bottom: 8px;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+            font-size: 0.9em;
+            animation: slideIn 0.3s ease;
+        }
+
+        .event-item.initial-detection {
+            border-left-color: #17a2b8;
+        }
+
+        .event-item.new-person {
+            border-left-color: #ffc107;
+        }
+
+        .event-item.tap-detected {
+            border-left-color: #28a745;
+        }
+
+        .event-item.realtime {
+            animation: slideIn 0.3s ease, pulse 0.5s ease;
+        }
+
+        .event-timestamp {
+            color: #888;
+            font-size: 0.8em;
+        }
+
+        .event-message {
+            color: #333;
+            margin-top: 5px;
+            font-weight: 500;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.02); }
+        }
+
         .logs-section {
             max-height: 400px;
             overflow-y: auto;
@@ -408,6 +470,13 @@
             </div>
         </div>
 
+        <div class="card" id="liveEventsCard" style="display: none;">
+            <h2 style="margin-bottom: 15px; color: #333;">🔴 Live Event Feed</h2>
+            <div class="live-events-section" id="liveEventsFeed">
+                <p style="text-align: center; color: #888;">Waiting for events...</p>
+            </div>
+        </div>
+
         <div class="card results-section" id="resultsSection">
             <h2 style="margin-bottom: 20px; color: #333;">Detection Results</h2>
             
@@ -438,25 +507,54 @@
         </div>
 
         <div class="card">
-            <h2 style="margin-bottom: 20px; color: #333;">Activity Logs</h2>
+            <h2 style="margin-bottom: 20px; color: #333;">📋 Event History</h2>
+            <div id="logFileInfo" style="margin-bottom: 10px; padding: 10px; background: #f0f0f0; border-radius: 5px; font-size: 0.9em; color: #666;">
+                <strong>Log File:</strong> <span id="logFileName">No events yet</span>
+            </div>
             <div class="logs-section" id="logsSection">
-                <p style="text-align: center; color: #888;">No logs yet</p>
+                <p style="text-align: center; color: #888;">No event logs yet</p>
             </div>
         </div>
     </div>
 
     <script>
-        const API_URL = 'http://localhost:8501';
+        // Dynamically detect backend URL for RunPod or localhost
+        let API_URL, WS_URL;
+        
+        if (window.location.hostname.includes('proxy.runpod.net')) {
+            // RunPod proxy URL - replace port 8000 with 8501
+            API_URL = window.location.origin.replace('-8000.', '-8501.');
+            WS_URL = API_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+        } else if (window.location.port === '8000') {
+            // Localhost with port 8000
+            API_URL = window.location.protocol + '//' + window.location.hostname + ':8501';
+            WS_URL = 'ws://' + window.location.hostname + ':8501/ws';
+        } else {
+            // Same origin
+            API_URL = window.location.origin;
+            WS_URL = 'ws://' + window.location.host + '/ws';
+        }
+        
+        console.log('API URL:', API_URL);
+        console.log('WebSocket URL:', WS_URL);
+        
         let uploadedFilename = '';
         let ws = null;
 
         // WebSocket connection
         function connectWebSocket() {
-            ws = new WebSocket('ws://localhost:8501/ws');
+            ws = new WebSocket(WS_URL);
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-                updateProgress(data.progress, data.message);
+                
+                if (data.type === 'event') {
+                    // Handle real-time event updates
+                    handleEventUpdate(data);
+                } else {
+                    // Handle progress updates
+                    updateProgress(data.progress, data.message);
+                }
             };
 
             ws.onerror = (error) => {
@@ -470,6 +568,54 @@
         }
 
         connectWebSocket();
+
+        // Handle real-time event updates
+        function handleEventUpdate(data) {
+            const liveEventsCard = document.getElementById('liveEventsCard');
+            const liveEventsFeed = document.getElementById('liveEventsFeed');
+            
+            // Show the live events card
+            liveEventsCard.style.display = 'block';
+            
+            // Clear "waiting" message if it exists
+            if (liveEventsFeed.querySelector('p')) {
+                liveEventsFeed.innerHTML = '';
+            }
+            
+            // Create event item
+            const eventItem = document.createElement('div');
+            eventItem.className = `event-item realtime ${data.event_type.replace('_', '-')}`;
+            
+            const eventIcon = {
+                'initial_detection': '🆕',
+                'new_person': '🆕',
+                'tap_detected': '✅'
+            }[data.event_type] || '🔵';
+            
+            const eventText = {
+                'initial_detection': `INITIAL DETECTION - Person ID ${data.track_id} (${data.color} box) detected at frame ${data.frame}`,
+                'new_person': `NEW PERSON DETECTED - Person ID ${data.track_id} (${data.color} box) entered at frame ${data.frame}`,
+                'tap_detected': `TAP DETECTED - Person ID ${data.track_id} (${data.color} box) tapped at frame ${data.frame}`
+            }[data.event_type] || data.message;
+            
+            eventItem.innerHTML = `
+                <div class="event-timestamp">${data.timestamp} <span style="color: #28a745; font-weight: bold;">● LIVE</span></div>
+                <div class="event-message">${eventIcon} ${eventText}</div>
+            `;
+            
+            // Add to top of feed
+            liveEventsFeed.insertBefore(eventItem, liveEventsFeed.firstChild);
+            
+            // Keep only last 20 events
+            while (liveEventsFeed.children.length > 20) {
+                liveEventsFeed.removeChild(liveEventsFeed.lastChild);
+            }
+            
+            // Also reload the event history logs
+            loadLogs();
+            
+            console.log('Real-time event received:', data);
+        }
 
         // File upload handling
         const uploadArea = document.getElementById('uploadArea');
@@ -663,35 +809,59 @@
 
         async function loadLogs() {
             try {
-                const response = await fetch(`${API_URL}/api/logs?log_type=processing&limit=20`);
+                const response = await fetch(`${API_URL}/api/logs?limit=100`);
                 const data = await response.json();
 
                 const logsSection = document.getElementById('logsSection');
+                const logFileName = document.getElementById('logFileName');
+                
+                // Update log file info
+                if (data.log_file) {
+                    logFileName.textContent = data.log_file;
+                } else {
+                    logFileName.textContent = 'No events yet';
+                }
+
                 logsSection.innerHTML = '';
 
-                if (data.logs.length === 0) {
-                    logsSection.innerHTML = '<p style="text-align: center; color: #888;">No logs yet</p>';
+                if (!data.logs || data.logs.length === 0) {
+                    logsSection.innerHTML = '<p style="text-align: center; color: #888;">No event logs yet</p>';
                     return;
                 }
 
+                // Display events in reverse order (newest first)
                 data.logs.reverse().forEach(log => {
                     const logEntry = document.createElement('div');
                     logEntry.className = 'log-entry';
 
-                    const timestamp = new Date(log.timestamp).toLocaleString();
+                    // Determine icon and color based on event type
+                    let icon = '🔵';
+                    let borderColor = '#667eea';
+                    
+                    if (log.event_type === 'initial_detection') {
+                        icon = '🆕';
+                        borderColor = '#17a2b8';
+                    } else if (log.event_type === 'new_person') {
+                        icon = '🆕';
+                        borderColor = '#ffc107';
+                    } else if (log.event_type === 'tap_detected') {
+                        icon = '✅';
+                        borderColor = '#28a745';
+                    }
+                    
+                    logEntry.style.borderLeftColor = borderColor;
                     
                     logEntry.innerHTML = `
-                        <div class="log-timestamp">${timestamp}</div>
+                        <div class="log-timestamp">${log.timestamp}</div>
                         <div class="log-content">
-                            <strong>${log.action.toUpperCase()}:</strong> ${log.input_file || log.filename}
-                            ${log.summary ? `<br>Results: ${log.summary.people_tapped}/${log.summary.total_people} tapped` : ''}
+                            ${icon} ${log.message}
                         </div>
                     `;
 
                     logsSection.appendChild(logEntry);
                 });
             } catch (error) {
-                console.error('Failed to load logs:', error);
+                console.error('Failed to load event logs:', error);
             }
         }
 

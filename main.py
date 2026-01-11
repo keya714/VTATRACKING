@@ -24,7 +24,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
 
-# Configure detailed logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -37,7 +36,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Tap Detection System")
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,7 +44,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files directory
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Store active WebSocket connections
@@ -77,10 +74,27 @@ async def broadcast_status(data: dict):
             logger.error(f"WebSocket send error: {e}")
             disconnected.append(connection)
     
-    # Remove disconnected clients
     for connection in disconnected:
         if connection in active_connections:
             active_connections.remove(connection)
+
+def sync_broadcast(data: dict):
+    """Synchronous wrapper for broadcasting from sync context"""
+    try:
+        # Create event loop if needed and run the async broadcast
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If loop is already running, create a task
+            asyncio.create_task(broadcast_status(data))
+        else:
+            # If loop is not running, run it
+            loop.run_until_complete(broadcast_status(data))
+    except RuntimeError:
+        # If no event loop exists, create a new one
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(broadcast_status(data))
+        loop.close()
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -100,29 +114,25 @@ async def root():
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.append(websocket)
-    logger.info(f"WebSocket connection established. Total connections: {len(active_connections)}")
+    logger.info(f"WebSocket connected. Total: {len(active_connections)}")
     
     try:
-        # Send current status immediately on connect
         await websocket.send_json({
             "status": processing_status.status,
             "progress": processing_status.progress,
             "message": processing_status.message
         })
         
-        # Keep connection alive
         while True:
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                # Echo back to keep alive
                 await websocket.send_json({"type": "ping", "data": "pong"})
             except asyncio.TimeoutError:
-                # Send ping to keep connection alive
                 await websocket.send_json({"type": "ping"})
     except WebSocketDisconnect:
         if websocket in active_connections:
             active_connections.remove(websocket)
-        logger.info(f"WebSocket disconnected. Remaining connections: {len(active_connections)}")
+        logger.info(f"WebSocket disconnected. Remaining: {len(active_connections)}")
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         if websocket in active_connections:
@@ -134,23 +144,19 @@ async def upload_video(file: UploadFile = File(...)):
     try:
         logger.info(f"Received upload request for file: {file.filename}")
         
-        # Validate file type
         if not file.filename.endswith(('.mp4', '.avi', '.mov', '.mkv')):
             logger.error(f"Invalid file type: {file.filename}")
             raise HTTPException(status_code=400, detail="Invalid file type. Please upload a video file.")
         
-        # Generate unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{file.filename}"
         file_path = UPLOAD_DIR / filename
         
-        # Save file
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
         logger.info(f"File saved successfully: {file_path}")
         
-        # Log upload details
         file_size = os.path.getsize(file_path)
         log_entry = {
             "timestamp": datetime.now().isoformat(),
@@ -183,7 +189,7 @@ async def process_video(
     check_interval: int = 30,
     initial_frame: int = 0
 ):
-    """Process uploaded video for tap detection"""
+    """Process uploaded video for tap detection with real-time events"""
     try:
         video_path = UPLOAD_DIR / filename
         
@@ -201,10 +207,8 @@ async def process_video(
             "message": "Initializing RT-DETR and SmolVLM models..."
         })
         
-        # Import here to avoid loading models on startup
         from tap_detector import MultiPersonTapTracker, visualize_multi_person_tracking
         
-        # Create tracker
         tracker = MultiPersonTapTracker(
             rtdetr_model="rtdetr-x.pt",
             conf_threshold=conf_threshold,
@@ -217,12 +221,16 @@ async def process_video(
             "message": "Models loaded. Starting tracking..."
         })
         
-        # Process video
-        logger.info("Starting multi-person tracking...")
-        video_detections, tracked_people = tracker.track_all_people(
-            video_path=str(video_path),
-            check_interval=check_interval,
-            initial_frame=initial_frame
+        # Use sync_broadcast as the callback for real-time events
+        logger.info("Starting multi-person tracking with real-time events...")
+        video_detections, tracked_people = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: tracker.track_all_people(
+                video_path=str(video_path),
+                check_interval=check_interval,
+                initial_frame=initial_frame,
+                broadcast_callback=sync_broadcast  # Pass sync wrapper
+            )
         )
         
         await broadcast_status({
@@ -231,17 +239,19 @@ async def process_video(
             "message": "Tracking complete. Generating output video..."
         })
         
-        # Create output video
         output_filename = f"processed_{filename}"
         output_path = OUTPUT_DIR / output_filename
         
         logger.info("Creating visualization video...")
-        visualize_multi_person_tracking(
-            video_path=str(video_path),
-            video_detections=video_detections,
-            tracked_people=tracked_people,
-            output_path=str(output_path),
-            initial_frame=initial_frame
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: visualize_multi_person_tracking(
+                video_path=str(video_path),
+                video_detections=video_detections,
+                tracked_people=tracked_people,
+                output_path=str(output_path),
+                initial_frame=initial_frame
+            )
         )
         
         await broadcast_status({
@@ -250,7 +260,6 @@ async def process_video(
             "message": "Saving results..."
         })
         
-        # Prepare results
         results = {
             "summary": {
                 "total_people": len(tracked_people),
@@ -271,14 +280,12 @@ async def process_video(
             }
             results["people"].append(person_data)
         
-        # Save results JSON
         results_filename = f"results_{filename.rsplit('.', 1)[0]}.json"
         results_path = OUTPUT_DIR / results_filename
         
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
         
-        # Log processing completion
         log_entry = {
             "timestamp": datetime.now().isoformat(),
             "action": "process",
@@ -369,27 +376,84 @@ async def get_status():
     })
 
 @app.get("/api/logs")
-async def get_logs(log_type: str = "processing", limit: int = 50):
-    """Get recent log entries"""
+async def get_logs(log_type: str = "events", limit: int = 100):
+    """Get recent event log entries (new person detection and tap detection)"""
     try:
-        log_file = LOG_DIR / f"{log_type}_log.jsonl"
+        # Find the most recent events_*.log file
+        event_logs = sorted(LOG_DIR.glob("events_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
         
-        if not log_file.exists():
-            return JSONResponse({"logs": []})
+        if not event_logs:
+            return JSONResponse({"logs": [], "log_file": None})
+        
+        log_file = event_logs[0]  # Most recent event log
+        logger.info(f"Reading event log: {log_file}")
         
         logs = []
-        with open(log_file, 'r') as f:
+        with open(log_file, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-            for line in lines[-limit:]:
-                try:
-                    logs.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+            
+            # Skip header lines (first 5 lines with ====)
+            content_lines = [line for line in lines if not line.startswith('=') and line.strip()]
+            
+            # Parse only event lines (those with timestamps and emoji indicators)
+            for line in content_lines[-limit:]:
+                if any(indicator in line for indicator in ['🆕', '✅']):
+                    # Extract timestamp and message
+                    if '[' in line and ']' in line:
+                        timestamp_end = line.index(']')
+                        timestamp = line[1:timestamp_end]
+                        message = line[timestamp_end + 2:].strip()
+                        
+                        # Determine event type
+                        if 'INITIAL DETECTION' in message:
+                            event_type = 'initial_detection'
+                        elif 'NEW PERSON DETECTED' in message:
+                            event_type = 'new_person'
+                        elif 'TAP DETECTED' in message:
+                            event_type = 'tap_detected'
+                        else:
+                            event_type = 'unknown'
+                        
+                        logs.append({
+                            "timestamp": timestamp,
+                            "message": message,
+                            "event_type": event_type,
+                            "raw_line": line.strip()
+                        })
         
-        return JSONResponse({"logs": logs})
+        return JSONResponse({
+            "logs": logs,
+            "log_file": log_file.name,
+            "total_events": len(logs)
+        })
         
     except Exception as e:
-        logger.error(f"Failed to fetch logs: {str(e)}")
+        logger.error(f"Failed to fetch event logs: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/event-log-files")
+async def get_event_log_files():
+    """Get list of all event log files"""
+    try:
+        event_logs = sorted(LOG_DIR.glob("events_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        log_files = []
+        for log_file in event_logs:
+            stat = log_file.stat()
+            log_files.append({
+                "filename": log_file.name,
+                "size_kb": round(stat.st_size / 1024, 2),
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "path": str(log_file)
+            })
+        
+        return JSONResponse({
+            "log_files": log_files,
+            "total": len(log_files)
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch event log files: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/health")
@@ -402,22 +466,21 @@ async def health_check():
     })
 
 if __name__ == "__main__":
-    # Create static directory and save index.html if it doesn't exist
     if not (STATIC_DIR / "index.html").exists():
         logger.warning("⚠️  index.html not found in static/ directory!")
         logger.info("Please save the frontend HTML to static/index.html")
     
     logger.info("="*70)
-    logger.info("🚀 Starting Tap Detection API Server")
+    logger.info("🚀 Starting Tap Detection API Server with Real-time Events")
     logger.info("="*70)
     logger.info(f"📂 Upload directory: {UPLOAD_DIR.absolute()}")
     logger.info(f"📂 Output directory: {OUTPUT_DIR.absolute()}")
     logger.info(f"📂 Logs directory: {LOG_DIR.absolute()}")
     logger.info(f"📂 Static files: {STATIC_DIR.absolute()}")
     logger.info("="*70)
-    logger.info("🌐 Server will start at: http://localhost:8000")
-    logger.info("🌐 Web Interface: http://localhost:8000/static/index.html")
-    logger.info("📚 API Documentation: http://localhost:8000/docs")
+    logger.info("🌐 Server will start at: http://localhost:8501")
+    logger.info("🌐 Web Interface: http://localhost:8501/static/index.html")
+    logger.info("📚 API Documentation: http://localhost:8501/docs")
     logger.info("="*70)
     
     uvicorn.run(app, host="0.0.0.0", port=8501, log_level="info")

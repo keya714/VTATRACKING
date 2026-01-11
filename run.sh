@@ -24,8 +24,22 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # Run the application
-echo "Starting FastAPI server..."
-python main.py
+echo "Starting backend on port 8000 and frontend on port 8501..."
+
+# Start backend in the background
+uvicorn main:app --host 0.0.0.0 --port 8000 &
+BACKEND_PID=$!
+
+# Start frontend
+streamlit run index.html --server.port 8501 &
+FRONTEND_PID=$!
+
+echo "Backend running on http://localhost:8000 (PID: $BACKEND_PID)"
+echo "Frontend running on http://localhost:8501 (PID: $FRONTEND_PID)"
+echo "Press Ctrl+C to stop both servers..."
+
+# Wait for both processes
+wait $BACKEND_PID $FRONTEND_PID
 
 # Deactivate virtual environment on exit
 deactivate
