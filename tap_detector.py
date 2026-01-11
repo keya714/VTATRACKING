@@ -13,6 +13,7 @@ from ultralytics import RTDETR
 import logging
 from datetime import datetime
 from pathlib import Path
+from PIL import Image as PILImage
 
 # ============================================================================
 # EVENT LOGGING WITH REAL-TIME BROADCASTING
@@ -32,7 +33,18 @@ class EventLogger:
         # Create event log filename based on video filename and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         video_base = Path(video_filename).stem
-        self.log_file = self.log_dir / f"events_{video_base}_{timestamp}.log"
+        
+        # Create dedicated experiment folder
+        self.experiment_folder = Path("experiments") / f"{video_base}_{timestamp}"
+        self.experiment_folder.mkdir(parents=True, exist_ok=True)
+        
+        # Create subfolders for organization
+        self.frames_folder = self.experiment_folder / "annotated_frames"
+        self.frames_folder.mkdir(exist_ok=True)
+        
+        self.log_file = self.experiment_folder / f"events_{video_base}_{timestamp}.log"
+        self.frame_counter = 0
+        self.check_counter = 0
         
         # Initialize the log file with header
         with open(self.log_file, 'w', encoding='utf-8') as f:
@@ -127,6 +139,91 @@ class EventLogger:
             f.write(f"{'-'*80}\n")
         
         print(f"   📝 Summary logged to: {self.log_file}")
+    
+    def log_vlm_call(self, check_number: int, frame_numbers: List[int], people_colors: Dict[int, str], prompt: str):
+        """Log VLM call details"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(f"\n{'='*80}\n")
+            f.write(f"[{timestamp}] 🔍 VLM CHECK #{check_number}\n")
+            f.write(f"{'='*80}\n")
+            f.write(f"Frames analyzed: {', '.join(map(str, frame_numbers))}\n")
+            f.write(f"People being checked: {', '.join([f'{color} (ID {pid})' for pid, color in people_colors.items()])}\n")
+            f.write(f"\nPROMPT SENT TO VLM:\n")
+            f.write(f"{'-'*80}\n")
+            f.write(f"{prompt}\n")
+            f.write(f"{'-'*80}\n\n")
+        
+        print(f"   📝 Logged: VLM Check #{check_number} initiated for frames {frame_numbers}")
+    
+    def log_vlm_response(self, check_number: int, response: str, parsed_results: Dict[int, Dict]):
+        """Log VLM response and parsed results"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(f"[{timestamp}] 📥 VLM RESPONSE #{check_number}:\n")
+            f.write(f"{'-'*80}\n")
+            f.write(f"{response}\n")
+            f.write(f"{'-'*80}\n")
+            f.write(f"\nPARSED RESULTS:\n")
+            for person_id, result in parsed_results.items():
+                status = "TAPPED" if result['is_tapping'] else "NOT TAPPED"
+                f.write(f"  Person ID {person_id}: {status}\n")
+            f.write(f"\n")
+        
+        print(f"   📝 Logged: VLM Response #{check_number} received and parsed")
+    
+    def save_annotated_frames_and_consolidate(self, annotated_frames: List[np.ndarray], 
+                                               frame_numbers: List[int], 
+                                               people_checked: Dict[int, str]) -> str:
+        """Save individual annotated frames and create a consolidated image using matplotlib"""
+        self.check_counter += 1
+        
+        # Create ordinal suffix for call number
+        def get_ordinal_suffix(n):
+            if 10 <= n % 100 <= 20:
+                suffix = 'th'
+            else:
+                suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')
+            return suffix
+        
+        ordinal_suffix = get_ordinal_suffix(self.check_counter)
+        call_name = f"{self.check_counter}{ordinal_suffix}_vlmcall.png"
+        
+        # Create consolidated image using matplotlib
+        if len(annotated_frames) > 0:
+            # Create figure with subplots
+            fig, axes = plt.subplots(1, len(annotated_frames), figsize=(6 * len(annotated_frames), 6))
+            
+            # Handle single frame case (axes won't be an array)
+            if len(annotated_frames) == 1:
+                axes = [axes]
+            
+            # Plot each frame
+            for idx, (ax, frame, frame_num) in enumerate(zip(axes, annotated_frames, frame_numbers)):
+                ax.imshow(frame)
+                ax.set_title(f"Frame {frame_num}", fontsize=14, fontweight='bold')
+                ax.axis('off')
+            
+            # Add overall title with metadata
+            people_text = ", ".join([f"{color}" for color in people_checked.values()])
+            fig.suptitle(f"VLM Check #{self.check_counter} | People: {people_text}", 
+                        fontsize=16, fontweight='bold', y=0.98)
+            
+            # Adjust layout to prevent overlap
+            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            
+            # Save consolidated image
+            consolidated_filename = self.frames_folder / call_name
+            plt.savefig(str(consolidated_filename), dpi=150, bbox_inches='tight')
+            plt.close(fig)
+            
+            print(f"   🖼️  Created VLM call visualization: {consolidated_filename.name}")
+            
+            return str(consolidated_filename)
+        
+        return ""
 
 # ============================================================================
 # COLOR MAPPING FOR PERSON IDENTIFICATION
@@ -179,7 +276,9 @@ class SmolVLMTapDetector:
         self.model.eval()
         print("✅ SmolVLM loaded")
 
-    def detect_tap_multi_frame(self, frames: List[np.ndarray], person_colors: Dict[int, str]) -> Dict[int, Dict]:
+    def detect_tap_multi_frame(self, frames: List[np.ndarray], person_colors: Dict[int, str], 
+                              event_logger: Optional['EventLogger'] = None, check_number: int = 0, 
+                              frame_numbers: List[int] = None) -> Dict[int, Dict]:
         """Detect if multiple people tapped across multiple frames using color-coded boxes"""
         pil_frames = []
         for frame in frames:
@@ -194,44 +293,61 @@ class SmolVLMTapDetector:
         for img in pil_frames:
             content.append({"type": "image"})
 
-        colors_order = list(person_colors.values())
-        colors_list = ", ".join(colors_order)
+        # ===================================================================
+        # PROMPT VARIABLES - Available for customization:
+        # ===================================================================
+        # {num_frames}     - Number of frames being analyzed (e.g., 1, 2, or 3)
+        # {colors_list}    - Comma-separated list of colors present (e.g., "RED, BLUE, GREEN")
+        # ===================================================================
+        
+        num_frames = len(pil_frames)  # Variable: Number of frames (1-3)
+        colors_order = list(person_colors.values())  # e.g. ["GREEN","YELLOW"] or ["YELLOW"]
+        colors_list = ", ".join(colors_order)  # Variable: Comma-separated colors (e.g., "RED, BLUE")
 
         prompt_text = f"""
-You are analyzing {len(pil_frames)} security camera frames.
+        You are analyzing {num_frames} security camera frames.
 
-People are identified ONLY by the colored bounding box around them.
-VALID COLORS (use ONLY these): {colors_list}
+        People are identified ONLY by the colored bounding box around them.
+        VALID COLORS (use ONLY these): {colors_list}
 
-TASK:
-Determine whether each color-box person TAPPED the fare payment reader.
+        TASK:
+        Determine whether each color-box person TAPPED the fare payment reader.
 
-DEFINITION OF "TAPPED" (be strict):
-Mark a person as TAPPED only if, in at least one frame, you clearly see ALL of:
-1) The person's hand/arm extends toward the fare reader
-2) The hand/card/phone touches the reader OR is within ~2 inches of it
-3) The motion is a clear payment gesture (not just standing near, walking by, or reaching elsewhere)
+        DEFINITION OF “TAPPED” (be strict):
+        Mark a person as TAPPED only if, in at least one frame, you clearly see ALL of:
+        1) The person’s hand/arm extends toward the fare reader
+        2) The hand/card/phone touches the reader OR is within ~2 inches of it
+        3) The motion is a clear payment gesture (not just standing near, walking by, or reaching elsewhere)
 
-NOT A TAP (always NOT TAPPED):
-- Simply standing closest to the reader
-- Walking past the reader
-- Hand not extended toward the reader
-- Reader is not clearly visible / interaction is occluded
-- Unclear distance or uncertain contact
+        NOT A TAP (always NOT TAPPED):
+        - Simply standing closest to the reader
+        - Walking past the reader
+        - Hand not extended toward the reader
+        - Reader is not clearly visible / interaction is occluded
+        - Unclear distance or uncertain contact
 
-OUTPUT FORMAT (exactly two lines, nothing else):
-TAPPED: [comma-separated list of COLOR OR NONE]
-NOT TAPPED: [comma-separated list of COLOR OR NONE]
+        ANTI-BIAS RULES (mandatory):
+        - Do NOT guess based on who is closest to the reader.
+        - Do NOT infer a tap from posture alone.
+        - If you cannot clearly verify contact/within-2-inches + a payment gesture, output NOT TAPPED.
 
-Strictly follow this CONSTRAINTS:
-- Each color must appear in exactly ONE category (TAPPED or NOT TAPPED)
-- If TAPPED is NONE, then NOT TAPPED must list ALL colors: {colors_list}
-- If NOT TAPPED is NONE, then TAPPED must list ALL colors: {colors_list}
+        OUTPUT FORMAT (exactly two lines, nothing else):
+        TAPPED: [comma-separated list of COLOR OR NONE]
+        NOT TAPPED: [comma-separated list of COLOR OR NONE]
 
-Now analyze the frames and respond in the required format.
-""".strip()
+        Strictly follow this CONSTRAINTS:
+        - Each color must appear in exactly ONE category (TAPPED or NOT TAPPED)
+        - If TAPPED is NONE, then NOT TAPPED must list ALL colors: {colors_list}
+        - If NOT TAPPED is NONE, then TAPPED must list ALL colors: {colors_list}
+
+        Now analyze the frames and respond in the required format.
+        """.strip()
 
         content.append({"type": "text", "text": prompt_text})
+        
+        # Log VLM call if logger is provided
+        if event_logger:
+            event_logger.log_vlm_call(check_number, frame_numbers or list(range(len(frames))), person_colors, prompt_text)
 
         messages = [{"role": "user", "content": content}]
         prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
@@ -283,6 +399,10 @@ Now analyze the frames and respond in the required format.
                 results[person_id]['response'] = f"{color_name}: TAPPED"
             else:
                 results[person_id]['response'] = f"{color_name}: NOT TAPPED"
+        
+        # Log VLM response if logger is provided
+        if event_logger:
+            event_logger.log_vlm_response(check_number, response, results)
 
         return results
 
@@ -313,6 +433,7 @@ class MultiPersonTapTracker:
         self.frame_buffer = []
         self.people_in_buffer = set()
         self.tapped_people: Dict[int, bool] = {}
+        self.experiment_folder = None
         print("✅ RT-DETR loaded")
 
     def initialize_tracking(self, video_path, initial_frame=0):
@@ -363,6 +484,7 @@ class MultiPersonTapTracker:
         """Track using color-coded bounding boxes with real-time event broadcasting"""
         # Initialize event logger with broadcast callback
         self.event_logger = EventLogger(video_path, broadcast_callback=broadcast_callback)
+        self.experiment_folder = self.event_logger.experiment_folder
         
         num_people = self.initialize_tracking(video_path, initial_frame)
 
@@ -450,13 +572,17 @@ class MultiPersonTapTracker:
 
     def check_buffered_frames(self, frame_idx):
         """Check buffered frames and broadcast tap events in real-time"""
-        if len(self.frame_buffer) < self.frames_per_check:
+        # Skip only if buffer is empty, otherwise process whatever frames we have (1-3)
+        if len(self.frame_buffer) == 0:
+            print(f"   ℹ️  No frames in buffer, skipping VLM check")
+            self.people_in_buffer.clear()
             return
 
         people_to_check = sorted([tid for tid in self.people_in_buffer
                                   if tid in self.tracked_people and not self.tapped_people.get(tid, False)])
 
         if not people_to_check:
+            print(f"   ℹ️  No people to check (all already tapped or no detections)")
             self.frame_buffer.clear()
             self.people_in_buffer.clear()
             return
@@ -488,7 +614,20 @@ class MultiPersonTapTracker:
 
             annotated_frames.append(frame_annotated)
 
-        results = self.tap_detector.detect_tap_multi_frame(annotated_frames, person_colors)
+        # Save annotated frames and create consolidated image
+        frame_numbers = [frame_num for frame_num, _, _ in self.frame_buffer]
+        if self.event_logger:
+            consolidated_path = self.event_logger.save_annotated_frames_and_consolidate(
+                annotated_frames, frame_numbers, person_colors
+            )
+
+        results = self.tap_detector.detect_tap_multi_frame(
+            annotated_frames, 
+            person_colors,
+            event_logger=self.event_logger,
+            check_number=self.event_logger.check_counter if self.event_logger else 0,
+            frame_numbers=frame_numbers
+        )
 
         for track_id, result in results.items():
             if track_id in self.tracked_people:
@@ -529,6 +668,10 @@ class MultiPersonTapTracker:
             }
             results["people"].append(person_data)
 
+        # Save to experiment folder if available
+        if self.experiment_folder:
+            output_file = self.experiment_folder / "results.json"
+        
         with open(output_file, 'w') as f:
             json.dump(results, f, indent=2)
 

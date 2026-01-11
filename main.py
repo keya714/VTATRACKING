@@ -23,6 +23,8 @@ OUTPUT_DIR = Path("outputs")
 OUTPUT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path("static")
 STATIC_DIR.mkdir(exist_ok=True)
+EXPERIMENTS_DIR = Path("experiments")
+EXPERIMENTS_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -254,6 +256,37 @@ async def process_video(
             )
         )
         
+        # Copy processed video to experiment folder
+        if tracker.experiment_folder:
+            experiment_video_path = tracker.experiment_folder / f"processed_video{output_path.suffix}"
+            shutil.copy(str(output_path), str(experiment_video_path))
+            logger.info(f"Copied processed video to experiment folder: {experiment_video_path}")
+            
+            # Create a summary file in experiment folder
+            summary_path = tracker.experiment_folder / "experiment_summary.txt"
+            with open(summary_path, 'w') as f:
+                f.write("="*80 + "\n")
+                f.write("VTA TRACKING EXPERIMENT SUMMARY\n")
+                f.write("="*80 + "\n\n")
+                f.write(f"Experiment Folder: {tracker.experiment_folder.name}\n")
+                f.write(f"Input Video: {filename}\n")
+                f.write(f"Processing Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                f.write("PROCESSING PARAMETERS:\n")
+                f.write(f"  - Confidence Threshold: {conf_threshold}\n")
+                f.write(f"  - Frames Per Check: {frames_per_check}\n")
+                f.write(f"  - Check Interval: {check_interval}\n")
+                f.write(f"  - Initial Frame: {initial_frame}\n\n")
+                f.write("FOLDER CONTENTS:\n")
+                f.write(f"  - annotated_frames/     : Individual annotated frames sent to VLM\n")
+                f.write(f"  - consolidated_images/  : Consolidated images of each VLM check\n")
+                f.write(f"  - events_*.log          : Detailed event log (new person, tap detection)\n")
+                f.write(f"  - results.json          : JSON results with all tracked people\n")
+                f.write(f"  - processed_video.*     : Final output video with tracking\n")
+                f.write(f"  - experiment_summary.txt: This file\n\n")
+                f.write("="*80 + "\n")
+            
+            logger.info(f"All experiment files organized in: {tracker.experiment_folder}")
+        
         await broadcast_status({
             "status": "processing",
             "progress": 90,
@@ -319,6 +352,7 @@ async def process_video(
             "status": "success",
             "output_video": output_filename,
             "results_file": results_filename,
+            "experiment_folder": str(tracker.experiment_folder.name) if tracker.experiment_folder else None,
             "results": results,
             "message": "Video processed successfully"
         })
@@ -379,8 +413,18 @@ async def get_status():
 async def get_logs(log_type: str = "events", limit: int = 100):
     """Get recent event log entries (new person detection and tap detection)"""
     try:
-        # Find the most recent events_*.log file
-        event_logs = sorted(LOG_DIR.glob("events_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # Find the most recent events_*.log file in experiments folders
+        event_logs = []
+        
+        # Search through all experiment folders
+        if EXPERIMENTS_DIR.exists():
+            for experiment_folder in EXPERIMENTS_DIR.iterdir():
+                if experiment_folder.is_dir():
+                    for log_file in experiment_folder.glob("events_*.log"):
+                        event_logs.append(log_file)
+        
+        # Sort by modification time, most recent first
+        event_logs = sorted(event_logs, key=lambda p: p.stat().st_mtime, reverse=True)
         
         if not event_logs:
             return JSONResponse({"logs": [], "log_file": None})
@@ -424,6 +468,7 @@ async def get_logs(log_type: str = "events", limit: int = 100):
         return JSONResponse({
             "logs": logs,
             "log_file": log_file.name,
+            "experiment_folder": log_file.parent.name,
             "total_events": len(logs)
         })
         
@@ -433,15 +478,26 @@ async def get_logs(log_type: str = "events", limit: int = 100):
 
 @app.get("/api/event-log-files")
 async def get_event_log_files():
-    """Get list of all event log files"""
+    """Get list of all event log files from experiments folders"""
     try:
-        event_logs = sorted(LOG_DIR.glob("events_*.log"), key=lambda p: p.stat().st_mtime, reverse=True)
+        event_logs = []
+        
+        # Search through all experiment folders
+        if EXPERIMENTS_DIR.exists():
+            for experiment_folder in EXPERIMENTS_DIR.iterdir():
+                if experiment_folder.is_dir():
+                    for log_file in experiment_folder.glob("events_*.log"):
+                        event_logs.append(log_file)
+        
+        # Sort by modification time, most recent first
+        event_logs = sorted(event_logs, key=lambda p: p.stat().st_mtime, reverse=True)
         
         log_files = []
         for log_file in event_logs:
             stat = log_file.stat()
             log_files.append({
                 "filename": log_file.name,
+                "experiment_folder": log_file.parent.name,
                 "size_kb": round(stat.st_size / 1024, 2),
                 "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
                 "path": str(log_file)
@@ -476,6 +532,7 @@ if __name__ == "__main__":
     logger.info(f"📂 Upload directory: {UPLOAD_DIR.absolute()}")
     logger.info(f"📂 Output directory: {OUTPUT_DIR.absolute()}")
     logger.info(f"📂 Logs directory: {LOG_DIR.absolute()}")
+    logger.info(f"📂 Experiments directory: {EXPERIMENTS_DIR.absolute()}")
     logger.info(f"📂 Static files: {STATIC_DIR.absolute()}")
     logger.info("="*70)
     logger.info("🌐 Server will start at: http://localhost:8501")

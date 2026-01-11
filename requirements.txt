@@ -10,12 +10,12 @@ torch>=2.0.0
 ultralytics>=8.0.0
 pillow>=10.0.0
 
-# Transformers for SmolVLM
-transformers>=4.35.0
-accelerate>=0.24.0
-
 # Data Processing
 matplotlib>=3.7.0
 
 # Jupyter (for IPython display)
 ipython>=8.12.0
+streamlit
+transformers
+accelerate
+hf_transfer
