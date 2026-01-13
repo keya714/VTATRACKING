@@ -569,38 +569,42 @@
 
         connectWebSocket();
 
+        // Event type configuration
+        const EVENT_CONFIG = {
+            'initial_detection': { icon: '🆕', color: '#17a2b8' },
+            'new_person': { icon: '🆕', color: '#ffc107' },
+            'tap_detected': { icon: '✅', color: '#28a745' }
+        };
+
+        function getEventText(eventType, data) {
+            const templates = {
+                'initial_detection': `INITIAL DETECTION - Person ID ${data.track_id} (${data.color} box) detected at frame ${data.frame}`,
+                'new_person': `NEW PERSON DETECTED - Person ID ${data.track_id} (${data.color} box) entered at frame ${data.frame}`,
+                'tap_detected': `TAP DETECTED - Person ID ${data.track_id} (${data.color} box) tapped at frame ${data.frame}`
+            };
+            return templates[eventType] || data.message;
+        }
+
         // Handle real-time event updates
         function handleEventUpdate(data) {
             const liveEventsCard = document.getElementById('liveEventsCard');
             const liveEventsFeed = document.getElementById('liveEventsFeed');
             
-            // Show the live events card
             liveEventsCard.style.display = 'block';
             
-            // Clear "waiting" message if it exists
             if (liveEventsFeed.querySelector('p')) {
                 liveEventsFeed.innerHTML = '';
             }
             
-            // Create event item
             const eventItem = document.createElement('div');
             eventItem.className = `event-item realtime ${data.event_type.replace('_', '-')}`;
             
-            const eventIcon = {
-                'initial_detection': '🆕',
-                'new_person': '🆕',
-                'tap_detected': '✅'
-            }[data.event_type] || '🔵';
-            
-            const eventText = {
-                'initial_detection': `INITIAL DETECTION - Person ID ${data.track_id} (${data.color} box) detected at frame ${data.frame}`,
-                'new_person': `NEW PERSON DETECTED - Person ID ${data.track_id} (${data.color} box) entered at frame ${data.frame}`,
-                'tap_detected': `TAP DETECTED - Person ID ${data.track_id} (${data.color} box) tapped at frame ${data.frame}`
-            }[data.event_type] || data.message;
+            const config = EVENT_CONFIG[data.event_type] || { icon: '🔵', color: '#667eea' };
+            const eventText = getEventText(data.event_type, data);
             
             eventItem.innerHTML = `
                 <div class="event-timestamp">${data.timestamp} <span style="color: #28a745; font-weight: bold;">● LIVE</span></div>
-                <div class="event-message">${eventIcon} ${eventText}</div>
+                <div class="event-message">${config.icon} ${eventText}</div>
             `;
             
             // Add to top of feed
@@ -834,27 +838,13 @@
                     const logEntry = document.createElement('div');
                     logEntry.className = 'log-entry';
 
-                    // Determine icon and color based on event type
-                    let icon = '🔵';
-                    let borderColor = '#667eea';
-                    
-                    if (log.event_type === 'initial_detection') {
-                        icon = '🆕';
-                        borderColor = '#17a2b8';
-                    } else if (log.event_type === 'new_person') {
-                        icon = '🆕';
-                        borderColor = '#ffc107';
-                    } else if (log.event_type === 'tap_detected') {
-                        icon = '✅';
-                        borderColor = '#28a745';
-                    }
-                    
-                    logEntry.style.borderLeftColor = borderColor;
+                    const config = EVENT_CONFIG[log.event_type] || { icon: '🔵', color: '#667eea' };
+                    logEntry.style.borderLeftColor = config.color;
                     
                     logEntry.innerHTML = `
                         <div class="log-timestamp">${log.timestamp}</div>
                         <div class="log-content">
-                            ${icon} ${log.message}
+                            ${config.icon} ${log.message}
                         </div>
                     `;
 

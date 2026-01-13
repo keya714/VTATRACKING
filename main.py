@@ -80,24 +80,6 @@ async def broadcast_status(data: dict):
         if connection in active_connections:
             active_connections.remove(connection)
 
-def sync_broadcast(data: dict):
-    """Synchronous wrapper for broadcasting from sync context"""
-    try:
-        # Create event loop if needed and run the async broadcast
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # If loop is already running, create a task
-            asyncio.create_task(broadcast_status(data))
-        else:
-            # If loop is not running, run it
-            loop.run_until_complete(broadcast_status(data))
-    except RuntimeError:
-        # If no event loop exists, create a new one
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(broadcast_status(data))
-        loop.close()
-
 @app.get("/", response_class=HTMLResponse)
 async def root():
     """Redirect to the main interface"""
@@ -223,7 +205,6 @@ async def process_video(
             "message": "Models loaded. Starting tracking..."
         })
         
-        # Use sync_broadcast as the callback for real-time events
         logger.info("Starting multi-person tracking with real-time events...")
         video_detections, tracked_people = await asyncio.get_event_loop().run_in_executor(
             None,
@@ -231,7 +212,7 @@ async def process_video(
                 video_path=str(video_path),
                 check_interval=check_interval,
                 initial_frame=initial_frame,
-                broadcast_callback=sync_broadcast  # Pass sync wrapper
+                broadcast_callback=lambda data: asyncio.create_task(broadcast_status(data))
             )
         )
         
@@ -340,13 +321,13 @@ async def process_video(
         
         logger.info(f"Processing complete for {filename}")
         
+        processing_status.update("complete", 100, "Processing complete")
+        
         await broadcast_status({
             "status": "complete",
             "progress": 100,
             "message": "Processing complete!"
         })
-        
-        processing_status.update("complete", 100, "Processing complete")
         
         return JSONResponse({
             "status": "success",
