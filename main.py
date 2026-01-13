@@ -14,17 +14,22 @@ from typing import Dict, List
 import cv2
 import numpy as np
 
-# Setup logging
+# Configuration constants
+DEFAULT_CONF_THRESHOLD = 0.7
+DEFAULT_FRAMES_PER_CHECK = 3
+SERVER_HOST = "0.0.0.0"
+SERVER_PORT = 8501
+VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv')
+
+# Setup directories
 LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR = Path("uploads")
-UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path("outputs")
-OUTPUT_DIR.mkdir(exist_ok=True)
 STATIC_DIR = Path("static")
-STATIC_DIR.mkdir(exist_ok=True)
 EXPERIMENTS_DIR = Path("experiments")
-EXPERIMENTS_DIR.mkdir(exist_ok=True)
+
+for directory in [LOG_DIR, UPLOAD_DIR, OUTPUT_DIR, STATIC_DIR, EXPERIMENTS_DIR]:
+    directory.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +55,26 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Store active WebSocket connections
 active_connections: List[WebSocket] = []
+
+# Global tracker - models loaded at startup
+tracker = None
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize models when server starts"""
+    global tracker
+    try:
+        logger.info("🔄 Loading RT-DETR and SmolVLM models...")
+        from tap_detector import MultiPersonTapTracker
+        tracker = MultiPersonTapTracker(
+            rtdetr_model="rtdetr-x.pt",
+            conf_threshold=DEFAULT_CONF_THRESHOLD,
+            frames_per_check=DEFAULT_FRAMES_PER_CHECK
+        )
+        logger.info("✅ Models loaded successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to load models: {e}", exc_info=True)
+        raise RuntimeError(f"Model initialization failed: {e}")
 
 class ProcessingStatus:
     def __init__(self):
@@ -128,9 +153,9 @@ async def upload_video(file: UploadFile = File(...)):
     try:
         logger.info(f"Received upload request for file: {file.filename}")
         
-        if not file.filename.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+        if not file.filename.endswith(VIDEO_EXTENSIONS):
             logger.error(f"Invalid file type: {file.filename}")
-            raise HTTPException(status_code=400, detail="Invalid file type. Please upload a video file.")
+            raise HTTPException(status_code=400, detail=f"Invalid file type. Supported formats: {', '.join(VIDEO_EXTENSIONS)}")
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"{timestamp}_{file.filename}"
@@ -175,6 +200,11 @@ async def process_video(
 ):
     """Process uploaded video for tap detection with real-time events"""
     try:
+        # Check if models are loaded
+        if tracker is None:
+            logger.error("Models not loaded")
+            raise HTTPException(status_code=503, detail="Models are still loading. Please wait and try again.")
+        
         video_path = UPLOAD_DIR / filename
         
         if not video_path.exists():
@@ -187,22 +217,20 @@ async def process_video(
         
         await broadcast_status({
             "status": "processing",
-            "progress": 0,
-            "message": "Initializing RT-DETR and SmolVLM models..."
+            "progress": 5,
+            "message": "Preparing tracker..."
         })
         
-        from tap_detector import MultiPersonTapTracker, visualize_multi_person_tracking
+        from tap_detector import visualize_multi_person_tracking
         
-        tracker = MultiPersonTapTracker(
-            rtdetr_model="rtdetr-x.pt",
-            conf_threshold=conf_threshold,
-            frames_per_check=frames_per_check
-        )
+        # Update tracker parameters for this request
+        tracker.conf_threshold = conf_threshold
+        tracker.frames_per_check = frames_per_check
         
         await broadcast_status({
             "status": "processing",
             "progress": 10,
-            "message": "Models loaded. Starting tracking..."
+            "message": "Starting tracking..."
         })
         
         logger.info("Starting multi-person tracking with real-time events...")
@@ -290,7 +318,8 @@ async def process_video(
                 "color_rgb": [int(c) for c in person.color],
                 "tapped": bool(person.has_tapped),
                 "tap_frame": int(person.tap_frame) if person.has_tapped and person.tap_frame else None,
-                "total_frames_tracked": int(person.frame_count)
+                "total_frames_tracked": int(person.frame_count),
+                "first_seen_frame": int(person.first_seen_frame)
             }
             results["people"].append(person_data)
         
@@ -502,6 +531,37 @@ async def health_check():
         "active_websockets": len(active_connections)
     })
 
+@app.get("/api/frame/{experiment_folder}/{frame_filename}")
+async def get_frame_image(experiment_folder: str, frame_filename: str):
+    """Serve a specific frame image from an experiment folder"""
+    try:
+        frame_path = EXPERIMENTS_DIR / experiment_folder / "annotated_frames" / frame_filename
+        
+        logger.info(f"📷 Frame requested: {frame_filename} from {experiment_folder}")
+        logger.info(f"   Full path: {frame_path}")
+        logger.info(f"   Exists: {frame_path.exists()}")
+        
+        if not frame_path.exists():
+            # List what files DO exist in that folder
+            folder_path = EXPERIMENTS_DIR / experiment_folder / "annotated_frames"
+            if folder_path.exists():
+                existing_files = list(folder_path.glob("*.png"))
+                logger.warning(f"   Frame not found. Existing files: {[f.name for f in existing_files[:5]]}")
+            else:
+                logger.error(f"   Folder doesn't exist: {folder_path}")
+            raise HTTPException(status_code=404, detail="Frame image not found")
+        
+        return FileResponse(
+            path=frame_path,
+            media_type="image/png",
+            filename=frame_filename
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to serve frame image: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 if __name__ == "__main__":
     if not (STATIC_DIR / "index.html").exists():
         logger.warning("⚠️  index.html not found in static/ directory!")
@@ -516,9 +576,9 @@ if __name__ == "__main__":
     logger.info(f"📂 Experiments directory: {EXPERIMENTS_DIR.absolute()}")
     logger.info(f"📂 Static files: {STATIC_DIR.absolute()}")
     logger.info("="*70)
-    logger.info("🌐 Server will start at: http://localhost:8501")
-    logger.info("🌐 Web Interface: http://localhost:8501/static/index.html")
-    logger.info("📚 API Documentation: http://localhost:8501/docs")
+    logger.info(f"🌐 Server will start at: http://localhost:{SERVER_PORT}")
+    logger.info(f"🌐 Web Interface: http://localhost:{SERVER_PORT}/static/index.html")
+    logger.info(f"📚 API Documentation: http://localhost:{SERVER_PORT}/docs")
     logger.info("="*70)
     
-    uvicorn.run(app, host="0.0.0.0", port=8501, log_level="info")
+    uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT, log_level="info")

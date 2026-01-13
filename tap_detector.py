@@ -16,6 +16,31 @@ from pathlib import Path
 from PIL import Image as PILImage
 
 # ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+# Tracking configuration
+DEFAULT_IOU_THRESHOLD = 0.3
+DEFAULT_MAX_FRAMES_MISSING = 10
+DEFAULT_HISTORY_LENGTH = 30
+
+# Detection configuration
+DEFAULT_CONF_THRESHOLD = 0.7
+DEFAULT_FRAMES_PER_CHECK = 3
+
+# Visual configuration
+PERSON_COLORS = [
+    (255, 0, 0), (0, 255, 0), (0, 0, 255),
+    (255, 255, 0), (255, 0, 255), (0, 255, 255),
+    (128, 0, 0), (0, 128, 0), (0, 0, 128)
+]
+COLOR_NAMES = [
+    "Red", "Green", "Blue", 
+    "Yellow", "Magenta", "Cyan",
+    "Maroon", "DarkGreen", "Navy"
+]
+
+# ============================================================================
 # EVENT LOGGING WITH REAL-TIME BROADCASTING
 # ============================================================================
 
@@ -29,6 +54,9 @@ class EventLogger:
         
         # Store broadcast callback for real-time updates
         self.broadcast_callback = broadcast_callback
+        
+        # Store person color mapping for real-time updates
+        self.person_colors_rgb = {}  # {track_id: (r, g, b)}
         
         # Create event log filename based on video filename and timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -46,6 +74,10 @@ class EventLogger:
         self.frame_counter = 0
         self.check_counter = 0
         
+        # Buffer log entries to reduce I/O latency
+        self.log_buffer = []
+        self.log_buffer_size = 10  # Flush after 10 entries
+        
         # Initialize the log file with header
         with open(self.log_file, 'w', encoding='utf-8') as f:
             f.write(f"{'='*80}\n")
@@ -56,19 +88,47 @@ class EventLogger:
         
         print(f"📝 Event log created: {self.log_file}")
     
+    def _flush_log_buffer(self):
+        """Flush buffered log entries to disk"""
+        if self.log_buffer:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.writelines(self.log_buffer)
+            self.log_buffer.clear()
+    
+    def _write_log(self, message: str):
+        """Write log entry with buffering to reduce I/O"""
+        self.log_buffer.append(message)
+        if len(self.log_buffer) >= self.log_buffer_size:
+            self._flush_log_buffer()
+    
     def _broadcast_event(self, event_data: dict):
-        """Broadcast event to connected clients via callback"""
+        """Broadcast event to connected clients via callback (non-blocking)"""
         if self.broadcast_callback:
             try:
-                # Call the async broadcast function from sync context
-                # The callback should handle the async execution
-                self.broadcast_callback(event_data)
+                # Call in a non-blocking way to avoid latency
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Schedule as a task without waiting
+                        asyncio.create_task(self.broadcast_callback(event_data))
+                    else:
+                        # Fallback for sync context
+                        asyncio.run(self.broadcast_callback(event_data))
+                except RuntimeError:
+                    # No event loop, skip broadcast to avoid blocking
+                    pass
             except Exception as e:
-                print(f"   ⚠️  Failed to broadcast event: {e}")
+                # Silently skip errors to avoid blocking processing
+                pass
     
-    def log_new_person(self, track_id: int, color_name: str, frame_number: int, is_initial: bool = False):
+    def log_new_person(self, track_id: int, color_name: str, frame_number: int, is_initial: bool = False, color_rgb: Tuple[int, int, int] = None):
         """Log when a new person is detected"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        # Store color RGB for this person
+        if color_rgb:
+            self.person_colors_rgb[track_id] = color_rgb
         
         if is_initial:
             message = f"[{timestamp}] 🆕 INITIAL DETECTION - Person ID {track_id} ({color_name} box) detected at frame {frame_number}\n"
@@ -77,12 +137,10 @@ class EventLogger:
             message = f"[{timestamp}] 🆕 NEW PERSON DETECTED - Person ID {track_id} ({color_name} box) entered at frame {frame_number}\n"
             event_type = "new_person"
         
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(message)
+        # Use buffered write to reduce I/O latency
+        self._write_log(message)
         
-        print(f"   📝 Logged: {message.strip()}")
-        
-        # Broadcast real-time update
+        # Broadcast real-time update with complete person data
         self._broadcast_event({
             "type": "event",
             "event_type": event_type,
@@ -90,7 +148,17 @@ class EventLogger:
             "color": color_name,
             "frame": frame_number,
             "timestamp": timestamp,
-            "message": message.strip()
+            "message": message.strip(),
+            "experiment_folder": self.experiment_folder.name,  # Add experiment folder name
+            # Additional data for real-time UI updates
+            "person_data": {
+                "track_id": track_id,
+                "color": color_name,
+                "color_rgb": list(color_rgb) if color_rgb else [128, 128, 128],
+                "tapped": False,
+                "first_seen_frame": frame_number,
+                "total_frames_tracked": 0
+            }
         })
     
     def log_tap_event(self, track_id: int, color_name: str, frame_number: int):
@@ -98,12 +166,10 @@ class EventLogger:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         message = f"[{timestamp}] ✅ TAP DETECTED - Person ID {track_id} ({color_name} box) tapped at frame {frame_number}\n"
         
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(message)
+        # Use buffered write to reduce I/O latency
+        self._write_log(message)
         
-        print(f"   📝 Logged: {message.strip()}")
-        
-        # Broadcast real-time update
+        # Broadcast real-time update with tap information
         self._broadcast_event({
             "type": "event",
             "event_type": "tap_detected",
@@ -111,11 +177,20 @@ class EventLogger:
             "color": color_name,
             "frame": frame_number,
             "timestamp": timestamp,
-            "message": message.strip()
+            "message": message.strip(),
+            # Additional data for real-time UI updates
+            "person_update": {
+                "track_id": track_id,
+                "tapped": True,
+                "tap_frame": frame_number
+            }
         })
     
     def log_summary(self, tracked_people: Dict, total_frames: int):
         """Log final summary at end of processing"""
+        # Flush any buffered entries first
+        self._flush_log_buffer()
+        
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         tapped_count = sum(1 for p in tracked_people.values() if p.has_tapped)
@@ -141,43 +216,88 @@ class EventLogger:
         print(f"   📝 Summary logged to: {self.log_file}")
     
     def log_vlm_call(self, check_number: int, frame_numbers: List[int], people_colors: Dict[int, str], prompt: str):
-        """Log VLM call details"""
+        """Log VLM call details (optimized - skip full prompt)"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(f"\n{'='*80}\n")
-            f.write(f"[{timestamp}] 🔍 VLM CHECK #{check_number}\n")
-            f.write(f"{'='*80}\n")
-            f.write(f"Frames analyzed: {', '.join(map(str, frame_numbers))}\n")
-            f.write(f"People being checked: {', '.join([f'{color} (ID {pid})' for pid, color in people_colors.items()])}\n")
-            f.write(f"\nPROMPT SENT TO VLM:\n")
-            f.write(f"{'-'*80}\n")
-            f.write(f"{prompt}\n")
-            f.write(f"{'-'*80}\n\n")
-        
-        print(f"   📝 Logged: VLM Check #{check_number} initiated for frames {frame_numbers}")
+        # Use buffered write for speed
+        message = f"\n{'='*80}\n"
+        message += f"[{timestamp}] 🔍 VLM CHECK #{check_number}\n"
+        message += f"{'='*80}\n"
+        message += f"Frames analyzed: {', '.join(map(str, frame_numbers))}\n"
+        message += f"People being checked: {', '.join([f'{color} (ID {pid})' for pid, color in people_colors.items()])}\n\n"
+        self._write_log(message)
     
     def log_vlm_response(self, check_number: int, response: str, parsed_results: Dict[int, Dict]):
-        """Log VLM response and parsed results"""
+        """Log VLM response and parsed results (optimized)"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
         
-        with open(self.log_file, 'a', encoding='utf-8') as f:
-            f.write(f"[{timestamp}] 📥 VLM RESPONSE #{check_number}:\n")
-            f.write(f"{'-'*80}\n")
-            f.write(f"{response}\n")
-            f.write(f"{'-'*80}\n")
-            f.write(f"\nPARSED RESULTS:\n")
-            for person_id, result in parsed_results.items():
-                status = "TAPPED" if result['is_tapping'] else "NOT TAPPED"
-                f.write(f"  Person ID {person_id}: {status}\n")
-            f.write(f"\n")
+        # Use buffered write for speed
+        message = f"[{timestamp}] 📥 VLM RESPONSE #{check_number}:\n"
+        message += f"RESULTS:\n"
+        for person_id, result in parsed_results.items():
+            status = "TAPPED" if result['is_tapping'] else "NOT TAPPED"
+            message += f"  Person ID {person_id}: {status}\n"
+        message += "\n"
+        self._write_log(message)
+    
+    def save_person_bbox_crop(self, frame_rgb: np.ndarray, bbox: np.ndarray, track_id: int, color: Tuple[int, int, int], color_name: str, frame_number: int):
+        """Save full frame with colored bounding box for a person"""
+        # Always print to console for visibility
+        print(f"🖼️  Saving initial frame for Person {track_id} ({color_name}) at frame {frame_number}")
         
-        print(f"   📝 Logged: VLM Response #{check_number} received and parsed")
+        try:
+            x1, y1, x2, y2 = map(int, bbox)
+            
+            # Create a copy of the full frame
+            frame_with_bbox = frame_rgb.copy()
+            
+            # Draw the bounding box on the full frame
+            cv2.rectangle(frame_with_bbox, (x1, y1), (x2, y2), color, 4)
+            
+            # Add color label at the top of bounding box
+            label = f"{color_name}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (text_width, text_height), _ = cv2.getTextSize(label, font, 0.8, 2)
+            cv2.rectangle(frame_with_bbox,
+                        (x1, y1 - text_height - 10),
+                        (x1 + text_width + 10, y1),
+                        color, -1)
+            cv2.putText(frame_with_bbox, label, 
+                      (x1 + 5, y1 - 5),
+                      font, 0.8, (255, 255, 255), 2)
+            
+            # Convert to BGR and save
+            frame_bgr = cv2.cvtColor(frame_with_bbox, cv2.COLOR_RGB2BGR)
+            frame_filename = f"person_{track_id}_{color_name}_frame_{str(frame_number).zfill(6)}.png"
+            frame_path = self.frames_folder / frame_filename
+            
+            # Ensure folder exists (critical!)
+            self.frames_folder.mkdir(parents=True, exist_ok=True)
+            
+            # Save the image with error checking
+            success = cv2.imwrite(str(frame_path), frame_bgr)
+            
+            if success:
+                print(f"   ✅ Successfully saved: {frame_filename}")
+                # Verify file exists
+                if not frame_path.exists():
+                    print(f"   ⚠️  WARNING: File was 'saved' but doesn't exist at {frame_path}")
+            else:
+                print(f"   ❌ cv2.imwrite returned False for: {frame_filename}")
+                print(f"   Frame shape: {frame_rgb.shape}")
+                print(f"   Bbox: {bbox}")
+                
+        except Exception as e:
+            print(f"   ❌ Exception saving frame for Person {track_id}: {str(e)}")
+            print(f"   Frame shape: {frame_rgb.shape if frame_rgb is not None else 'None'}")
+            print(f"   Bbox: {bbox}")
+            import traceback
+            traceback.print_exc()
     
     def save_annotated_frames_and_consolidate(self, annotated_frames: List[np.ndarray], 
                                                frame_numbers: List[int], 
                                                people_checked: Dict[int, str]) -> str:
-        """Save individual annotated frames and create a consolidated image using matplotlib"""
+        """Create a consolidated image - skip individual frame saves for speed"""
         self.check_counter += 1
         
         # Create ordinal suffix for call number
@@ -191,8 +311,12 @@ class EventLogger:
         ordinal_suffix = get_ordinal_suffix(self.check_counter)
         call_name = f"{self.check_counter}{ordinal_suffix}_vlmcall.png"
         
-        # Create consolidated image using matplotlib
+        # Create consolidated image using matplotlib (skip individual frames for speed)
         if len(annotated_frames) > 0:
+            # Use non-interactive backend for speed
+            import matplotlib
+            matplotlib.use('Agg')  # Non-interactive backend
+            
             # Create figure with subplots
             fig, axes = plt.subplots(1, len(annotated_frames), figsize=(6 * len(annotated_frames), 6))
             
@@ -211,45 +335,21 @@ class EventLogger:
             fig.suptitle(f"VLM Check #{self.check_counter} | People: {people_text}", 
                         fontsize=16, fontweight='bold', y=0.98)
             
-            # Adjust layout to prevent overlap
-            plt.tight_layout(rect=[0, 0, 1, 0.96])
+            # Quick layout (skip tight_layout for speed)
+            plt.subplots_adjust(top=0.92, bottom=0.05, left=0.05, right=0.95)
             
-            # Save consolidated image
+            # Save consolidated image with lower DPI for speed
             consolidated_filename = self.frames_folder / call_name
-            plt.savefig(str(consolidated_filename), dpi=150, bbox_inches='tight')
+            plt.savefig(str(consolidated_filename), dpi=100, bbox_inches='tight')
             plt.close(fig)
-            
-            print(f"   🖼️  Created VLM call visualization: {consolidated_filename.name}")
             
             return str(consolidated_filename)
         
         return ""
 
 # ============================================================================
-# COLOR MAPPING FOR PERSON IDENTIFICATION
+# HELPER FUNCTIONS
 # ============================================================================
-
-PERSON_COLORS = [
-    (255, 0, 0),      # Red
-    (0, 0, 255),      # Blue
-    (0, 255, 0),      # Green
-    (255, 255, 0),    # Yellow
-    (255, 0, 255),    # Magenta/Pink
-    (0, 255, 255),    # Cyan
-    (255, 128, 0),    # Orange
-    (128, 0, 128),    # Purple
-]
-
-COLOR_NAMES = [
-    "RED",
-    "BLUE",
-    "GREEN",
-    "YELLOW",
-    "PINK",
-    "CYAN",
-    "ORANGE",
-    "PURPLE"
-]
 
 def get_color_for_person(person_id: int) -> Tuple[Tuple[int, int, int], str]:
     """Get unique color and name for a person ID"""
@@ -420,6 +520,7 @@ class TrackedPerson:
     frame_count: int = 0
     last_check_frame: int = -1
     bbox: Optional[List[float]] = None
+    first_seen_frame: int = 0
 
 class MultiPersonTapTracker:
     def __init__(self, rtdetr_model="rtdetr-x.pt", conf_threshold=0.7, frames_per_check=3):
@@ -470,13 +571,19 @@ class MultiPersonTapTracker:
                     track_id=track_id,
                     color=color,
                     color_name=color_name,
-                    bbox=bbox.tolist()
+                    bbox=bbox.tolist(),
+                    first_seen_frame=initial_frame
                 )
                 self.tapped_people[track_id] = False
-                print(f"   ✓ Initialized Person {track_id} with {color_name} box")
+                # Skip verbose print for speed
+                # print(f"   ✓ Initialized Person {track_id} with {color_name} box")
                 
                 if self.event_logger:
-                    self.event_logger.log_new_person(track_id, color_name, initial_frame, is_initial=True)
+                    # Save cropped bbox image for this person
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    self.event_logger.save_person_bbox_crop(frame_rgb, bbox, track_id, color, color_name, initial_frame)
+                    # Pass color RGB for frontend display
+                    self.event_logger.log_new_person(track_id, color_name, initial_frame, is_initial=True, color_rgb=color)
 
         return len(self.tracked_people)
 
@@ -527,13 +634,17 @@ class MultiPersonTapTracker:
                         self.tracked_people[track_id] = TrackedPerson(
                             track_id=track_id,
                             color=color,
-                            color_name=color_name
+                            color_name=color_name,
+                            first_seen_frame=frame_idx
                         )
                         self.tapped_people[track_id] = False
-                        print(f"   New person {track_id} ({color_name} box) at frame {frame_idx}")
+                        # Skip verbose print for speed during processing
+                        # print(f"   New person {track_id} ({color_name} box) at frame {frame_idx}")
                         
                         if self.event_logger:
-                            self.event_logger.log_new_person(track_id, color_name, frame_idx, is_initial=False)
+                            # Save cropped bbox image for this person
+                            self.event_logger.save_person_bbox_crop(frame_rgb, box, track_id, color, color_name, frame_idx)
+                            self.event_logger.log_new_person(track_id, color_name, frame_idx, is_initial=False, color_rgb=color)
 
                     current_detections[track_id] = {
                         'bbox': box,
@@ -553,7 +664,8 @@ class MultiPersonTapTracker:
 
             if frame_idx in target_frames:
                 if len(current_detections) > 0:
-                    self.frame_buffer.append((frame_idx, frame_rgb.copy(), current_detections.copy()))
+                    # Only copy frame if we need it - deep copy is expensive
+                    self.frame_buffer.append((frame_idx, frame_rgb.copy(), dict(current_detections)))
                     self.people_in_buffer.update(current_detections.keys())
 
             if frame_idx == base_frame + 30 and len(self.frame_buffer) > 0:
@@ -574,7 +686,8 @@ class MultiPersonTapTracker:
         """Check buffered frames and broadcast tap events in real-time"""
         # Skip only if buffer is empty, otherwise process whatever frames we have (1-3)
         if len(self.frame_buffer) == 0:
-            print(f"   ℹ️  No frames in buffer, skipping VLM check")
+            # Skip verbose print for speed
+            # print(f"   ℹ️  No frames in buffer, skipping VLM check")
             self.people_in_buffer.clear()
             return
 
@@ -582,7 +695,8 @@ class MultiPersonTapTracker:
                                   if tid in self.tracked_people and not self.tapped_people.get(tid, False)])
 
         if not people_to_check:
-            print(f"   ℹ️  No people to check (all already tapped or no detections)")
+            # Skip verbose print for speed
+            # print(f"   ℹ️  No people to check (all already tapped or no detections)")
             self.frame_buffer.clear()
             self.people_in_buffer.clear()
             return
@@ -617,6 +731,9 @@ class MultiPersonTapTracker:
         # Save annotated frames and create consolidated image
         frame_numbers = [frame_num for frame_num, _, _ in self.frame_buffer]
         if self.event_logger:
+            # Note: Individual person frames are already saved when first detected
+            # via save_person_bbox_crop() in initialize_tracking() and track_all_people()
+            # We only need to save the consolidated VLM check image here
             consolidated_path = self.event_logger.save_annotated_frames_and_consolidate(
                 annotated_frames, frame_numbers, person_colors
             )
